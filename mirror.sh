@@ -2,15 +2,51 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# 0. Load configuration
+# Load configuration
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-source "$SCRIPT_DIR/mirror.conf"
+CONFIG_FILE="$SCRIPT_DIR/mirror.conf"
+
+# Check if mirror.conf exists before sourcing it
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Configuration file ($CONFIG_FILE) not found!"
+  exit 1
+fi
+source "$CONFIG_FILE"
+
+# Handle -s or --select argument
+if [[ "${1:-}" == "-s" || "${1:-}" == "--select" ]]; then
+  if ! command -v fzf >/dev/null; then
+    echo "Error: fzf is not installed. Install it with 'sudo apt install fzf' or similar."
+    exit 1
+  fi
+
+  echo "Scanning for mirrored .html files..."
+  html_files=$(find "$MIRROR_DIR" -type f -name '*.html')
+
+  if [[ -z "$html_files" ]]; then
+    echo "No .html files found in $MIRROR_DIR."
+    exit 1
+  fi
+
+  selected=$(echo "$html_files" | fzf --multi --prompt="Open file(s): ")
+
+  if [[ -z "$selected" ]]; then
+    echo "No files selected."
+    exit 0
+  fi
+
+  echo "Opening in browser: $BROWSER"
+  while IFS= read -r file; do
+    "$BROWSER" "$file" &
+  done <<< "$selected"
+
+  exit 0
+fi
 
 # 1. Prepare directories and logs
 mkdir -p "$MIRROR_DIR"
 : > "$LOG_FILE"
 : > "$SUMMARY_FILE"
-: > "$CHECKSUM_FILE"
 
 # Helper: fetch sitemap and extract URLs
 fetch_sitemap() {
@@ -26,7 +62,7 @@ fetch_sitemap() {
 
 # 2. Build a comprehensive URL list
 TMP_URLS=$(mktemp)
-trap "rm -f $TMP_URLS" EXIT
+trap 'rm -f "$TMP_URLS"' EXIT
 
 # a) add original URLs
 grep -v '^\s*$' "$URL_FILE" >>"$TMP_URLS"
@@ -62,7 +98,6 @@ download_site() {
     --timeout=30
     "--output-file=$LOG_FILE"
   )
-  $SHOW_PROGRESS && opts+=(--show-progress)
 
   if [[ "$USE_HEADLESS" == "true" ]]; then
     # If you need JS-rendered HTML, use your Puppeteer script:
@@ -76,13 +111,13 @@ download_site() {
 }
 
 export -f download_site
-export MIRROR_DIR LOG_FILE MAX_LEVEL ACCEPT REJECT SHOW_PROGRESS USE_HEADLESS PUPPETEER_SCRIPT
+export MIRROR_DIR LOG_FILE MAX_LEVEL ACCEPT REJECT USE_HEADLESS PUPPETEER_SCRIPT
 
 # 4. Run parallel downloads
 echo "Starting mirror with $PARALLEL_JOBS parallel jobs…"
-parallel --jobs "$PARALLEL_JOBS" download_site :::: "$TMP_URLS"
+parallel --jobs 2 download_site :::: "$TMP_URLS"
 
-# 5. Generate summary and checksums
+# 5. Generate summary (no checksum part anymore)
 
 # a) Summary report
 {
@@ -94,13 +129,7 @@ parallel --jobs "$PARALLEL_JOBS" download_site :::: "$TMP_URLS"
   echo "- Total mirror size:"
   du -sh "$MIRROR_DIR" | cut -f1
   echo "- Errors found in log:"
-  grep -Ei "error|failed" "$LOG_FILE" | wc -l
+  grep -cEi "error|failed" "$LOG_FILE"
 } >> "$SUMMARY_FILE"
 
-# b) Checksums
-echo "=== Checksums (${CHECKSUM_ALGO}) ===" >> "$CHECKSUM_FILE"
-find "$MIRROR_DIR" -type f -print0 \
-  | xargs -0 $CHECKSUM_ALGO \
-  >> "$CHECKSUM_FILE"
-
-echo "Done! See $SUMMARY_FILE and $CHECKSUM_FILE for details."
+echo "Done! See $SUMMARY_FILE for details."
