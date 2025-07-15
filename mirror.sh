@@ -2,86 +2,119 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+#-------------------------
 # Load configuration
+#-------------------------
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 CONFIG_FILE="$SCRIPT_DIR/mirror.conf"
 
-# Check if mirror.conf exists before sourcing it
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Configuration file ($CONFIG_FILE) not found!"
   exit 1
 fi
 source "$CONFIG_FILE"
 
-# Handle -s or --select argument
+# Provide defaults if any variable is unset
+URL_FILE=${URL_FILE:-"$SCRIPT_DIR/urls.txt"}
+MIRROR_DIR=${MIRROR_DIR:-"$SCRIPT_DIR/mirror"}
+LOG_FILE=${LOG_FILE:-"$SCRIPT_DIR/mirror.log"}
+SUMMARY_FILE=${SUMMARY_FILE:-"$SCRIPT_DIR/mirror-summary.txt"}
+MAX_LEVEL=${MAX_LEVEL:-0}
+ACCEPT=${ACCEPT:-"*.html"}
+REJECT=${REJECT:-""}
+PARALLEL_JOBS=${PARALLEL_JOBS:-2}
+USE_HEADLESS=${USE_HEADLESS:-"false"}
+PUPPETEER_SCRIPT=${PUPPETEER_SCRIPT:-"$SCRIPT_DIR/render.js"}
+BROWSER=${BROWSER:-"xdg-open"}
+
+#-------------------------
+# Pre-flight checks
+#-------------------------
+if [[ ! -f "$URL_FILE" ]]; then
+  echo "URL list file ($URL_FILE) not found!"
+  exit 1
+fi
+
+if [[ "$USE_HEADLESS" == "true" && ! -x "$PUPPETEER_SCRIPT" ]]; then
+  echo "Headless mode enabled, but Puppeteer script not found or not executable: $PUPPETEER_SCRIPT"
+  exit 1
+fi
+
+#-------------------------
+# Handle -s/--select mode
+#-------------------------
 if [[ "${1:-}" == "-s" || "${1:-}" == "--select" ]]; then
   if ! command -v fzf >/dev/null; then
-    echo "Error: fzf is not installed. Install it with 'sudo apt install fzf' or similar."
+    echo "Error: fzf is not installed."
     exit 1
   fi
 
   echo "Scanning for mirrored .html files..."
-  html_files=$(find "$MIRROR_DIR" -type f -name '*.html')
-
-  if [[ -z "$html_files" ]]; then
+  mapfile -t html_files < <(find "$MIRROR_DIR" -type f -name '*.html')
+  if [[ ${#html_files[@]} -eq 0 ]]; then
     echo "No .html files found in $MIRROR_DIR."
-    exit 1
-  fi
-
-  selected=$(echo "$html_files" | fzf --multi --prompt="Open file(s): ")
-
-  if [[ -z "$selected" ]]; then
-    echo "No files selected."
     exit 0
   fi
+
+  selected=$(printf '%s\n' "${html_files[@]}" | fzf --multi --prompt="Open file(s): ")
+  [[ -z "$selected" ]] && exit 0
 
   echo "Opening in browser: $BROWSER"
   while IFS= read -r file; do
     "$BROWSER" "$file" &
   done <<< "$selected"
-
   exit 0
 fi
 
-# 1. Prepare directories and logs
+#-------------------------
+# Prepare directories & logs
+#-------------------------
 mkdir -p "$MIRROR_DIR"
 : > "$LOG_FILE"
 : > "$SUMMARY_FILE"
 
-# Helper: fetch sitemap and extract URLs
+#-------------------------
+# Helper: fetch sitemap URLs
+#-------------------------
 fetch_sitemap() {
   local base_url="$1"
   local sitemap_url="${base_url%/}/sitemap.xml"
+
   if curl --head --silent --fail "$sitemap_url" >/dev/null; then
     echo "→ Found sitemap: $sitemap_url"
     curl -s "$sitemap_url" \
       | grep -oP '(?<=<loc>)[^<]+' \
-      | sed 's|/$||'   # strip trailing slash
+      | sed 's|/$||'
   fi
 }
 
-# 2. Build a comprehensive URL list
+#-------------------------
+# Build URL list
+#-------------------------
 TMP_URLS=$(mktemp)
 trap 'rm -f "$TMP_URLS"' EXIT
 
-# a) add original URLs
-grep -v '^\s*$' "$URL_FILE" >>"$TMP_URLS"
+# a) original URLs
+grep -v '^\s*$' "$URL_FILE" >> "$TMP_URLS"
 
-# b) add URLs from each sitemap
+# b) sitemap expansion
 while read -r url; do
-  fetch_sitemap "$url" >>"$TMP_URLS"
+  fetch_sitemap "$url" >> "$TMP_URLS"
 done < <(grep -v '^\s*$' "$URL_FILE")
 
 # c) dedupe
 sort -u "$TMP_URLS" -o "$TMP_URLS"
 
-# 3. Define download function for GNU Parallel
+#-------------------------
+# Site download function
+#-------------------------
 download_site() {
   local url="$1"
-  local domain
-  domain=$(echo "$url" | awk -F[/:] '{print $4}')
+  # Extract domain (handles ports, subdomains, etc.)
+  local host="${url#*//}"
+  host="${host%%/*}"
 
-  # Build the wget options array
+  # wget options
   local opts=(
     --mirror
     "--level=$MAX_LEVEL"
@@ -92,7 +125,7 @@ download_site() {
     --page-requisites
     --no-parent
     --span-hosts
-    "--domains=$domain"
+    "--domains=$host"
     "--directory-prefix=$MIRROR_DIR"
     --tries=3
     --timeout=30
@@ -100,8 +133,6 @@ download_site() {
   )
 
   if [[ "$USE_HEADLESS" == "true" ]]; then
-    # If you need JS-rendered HTML, use your Puppeteer script:
-    # node render.js <URL> <outfile.html>
     local out_html="$MIRROR_DIR/$(echo "$url" \
       | sed 's|https\?://||;s|[/?&=]|_|g').html"
     node "$PUPPETEER_SCRIPT" "$url" "$out_html"
@@ -113,23 +144,34 @@ download_site() {
 export -f download_site
 export MIRROR_DIR LOG_FILE MAX_LEVEL ACCEPT REJECT USE_HEADLESS PUPPETEER_SCRIPT
 
-# 4. Run parallel downloads
+#-------------------------
+# Run parallel downloads
+#-------------------------
 echo "Starting mirror with $PARALLEL_JOBS parallel jobs…"
-parallel --jobs 2 download_site :::: "$TMP_URLS"
 
-# 5. Generate summary (no checksum part anymore)
+# disable exit-on-error so we can catch failures
+set +e
+parallel --jobs "$PARALLEL_JOBS" download_site :::: "$TMP_URLS"
+par_exit=$?
+set -e
 
-# a) Summary report
+if [[ $par_exit -ne 0 ]]; then
+  echo "Warning: $par_exit parallel job(s) failed. See $LOG_FILE for details."
+fi
+
+#-------------------------
+# Generate summary
+#-------------------------
 {
   echo "=== Mirror Summary: $(date) ==="
   echo "- Original start URLs: $(wc -l < "$URL_FILE")"
-  echo "- Total URLs after sitemap expansion: $(wc -l < "$TMP_URLS")"
-  echo "- Total files mirrored:"
-  find "$MIRROR_DIR" -type f | wc -l
-  echo "- Total mirror size:"
-  du -sh "$MIRROR_DIR" | cut -f1
-  echo "- Errors found in log:"
-  grep -cEi "error|failed" "$LOG_FILE"
+  echo "- URLs after sitemap expansion: $(wc -l < "$TMP_URLS")"
+  echo "- Total files mirrored: $(find "$MIRROR_DIR" -type f | wc -l)"
+  echo "- Total mirror size: $(du -sh "$MIRROR_DIR" | cut -f1)"
+  echo "- Errors in log: $(grep -cEi 'error|failed' "$LOG_FILE")"
 } >> "$SUMMARY_FILE"
 
-echo "Done! See $SUMMARY_FILE for details."
+echo "Mirror complete. Summary written to $SUMMARY_FILE."
+
+# ensure a zero exit so ble.sh doesn’t show “exit 1”
+exit 0
