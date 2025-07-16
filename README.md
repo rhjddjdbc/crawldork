@@ -19,19 +19,6 @@ Before using the script, make sure you have the following tools installed:
 * `node.js` (for Puppeteer support, if needed)
 * `curl` (for fetching sitemaps)
 
-You can install the necessary packages using:
-
-```bash
-sudo apt update
-sudo apt install wget parallel fzf curl nodejs npm
-```
-
-For Puppeteer, you'll also need to install it via npm:
-
-```bash
-npm install puppeteer
-```
-
 ## Setup
 
 1. Clone or download this repository.
