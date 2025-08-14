@@ -144,7 +144,7 @@ EOF
 
 # === Interactive Mode Selector ===
 echo "Choose a mode:"
-echo "1) Google Dorking (search + optional mirror)"
+echo "1) Dorking (search + optional mirror)"
 echo "2) Mirror only (use existing urls.txt)"
 echo "3) View mirrored HTML files"
 read -rp "Choice (1/2/3): " mode
@@ -205,7 +205,7 @@ if [[ "$mode" == "2" ]]; then
 fi
 
 # === Mode 1: Dorking + optional mirroring ===
-echo "=== Google Dorking Tool (ddgr edition) ==="
+echo "=== Dorking Tool (ddgr edition) ==="
 echo "Leave input empty to skip a field."
 
 read -rp "Keyword: " keyword
