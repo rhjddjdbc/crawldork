@@ -1,102 +1,132 @@
-# Web-Crawler
+# Crawldork
 
-This script allows you to mirror websites locally by downloading all the pages, resources, and links, optionally using a headless browser for JavaScript-rendered content. It includes features like parallel downloading, sitemap extraction, and the ability to browse the downloaded files via `fzf`.
+**Crawldork** is a Bash-based tool for privacy-respecting web reconnaissance and local mirroring. It allows you to craft advanced search queries, extract URLs, mirror web content locally, and browse downloaded files interactively — all from the terminal.
+
+---
 
 ## Features
 
-* **Parallel Downloads**: Uses `GNU Parallel` for efficient downloading of multiple sites.
-* **Sitemap Extraction**: Automatically fetches and parses sitemaps from websites for efficient URL discovery.
-* **Selective File Opening**: Use `fzf` to select and open downloaded HTML files in a browser.
-* **Headless Browser Support**: Supports downloading JavaScript-rendered HTML using Puppeteer (optional).
+* Custom web search via `ddgr` (DuckDuckGo CLI)
+* Optional mirroring of URLs with `wget`
+* Automatic sitemap expansion
+* Parallel downloads using `GNU parallel`
+* Optional headless browser rendering via Puppeteer
+* Interactive file viewer (e.g., HTML, PDF) with `fzf`
+
+---
 
 ## Requirements
 
-Before using the script, make sure you have the following tools installed:
+Ensure the following tools are installed on your system:
 
-* `wget` (for downloading files)
-* `parallel` (for parallel execution)
-* `fzf` (for file selection, optional for browsing)
-* `node.js` (for Puppeteer support, if needed)
-* `curl` (for fetching sitemaps)
+* `bash`
+* `ddgr`
+* `jq`
+* `wget`
+* `parallel`
+* `fzf` (required for interactive file browsing)
+* `xdg-open` (or any browser launcher)
+* `node` (only if headless rendering is enabled)
 
-## Setup
-
-1. Clone or download this repository.
-2. Place your configuration file (`mirror.conf`) in the same directory as the script.
-
-### Example `mirror.conf`:
+### Debian / Ubuntu
 
 ```bash
-# URL_FILE: Path to a file containing a list of URLs to start the mirroring process.
-URL_FILE="./urls.txt"
-
-# MIRROR_DIR: Directory where the mirrored files will be stored.
-MIRROR_DIR="./mirrored_files"
-
-# LOG_FILE: Path to the log file where download errors will be logged.
-LOG_FILE="./mirror.log"
-
-# SUMMARY_FILE: Path to the summary report.
-SUMMARY_FILE="./summary.txt"
-
-# CHECKSUM_FILE: Path to store checksums (disabled in this version).
-CHECKSUM_FILE="./checksums.txt"
-
-# MAX_LEVEL: Maximum depth to mirror.
-MAX_LEVEL=5
-
-# ACCEPT: File extensions to accept (e.g., .html, .css, .js).
-ACCEPT="html,css,js,png,jpg,gif"
-
-# REJECT: File extensions to reject (e.g., .pdf, .mp3).
-REJECT="pdf,mp3"
-
-# Use a headless browser to render JS (optional).
-USE_HEADLESS=true
-PUPPETEER_SCRIPT="./render.js"  # Path to your Puppeteer script.
-PARALLEL_JOBS=2  # Number of parallel download jobs.
+sudo apt update
+sudo apt install ddgr jq wget parallel fzf
 ```
+
+### Arch / Manjaro
+
+```bash
+sudo pacman -S ddgr jq wget parallel fzf
+```
+
+If you use `yay` or another AUR helper, you can install optional packages like `xdg-utils` and `nodejs`:
+
+```bash
+yay -S xdg-utils nodejs
+```
+
+---
 
 ## Usage
 
-### 1. Basic Usage: Mirror a Website
-
-To start mirroring the websites listed in `URL_FILE`, simply run the script:
+Run the script:
 
 ```bash
-./mirror.sh
+./crawldork.sh
 ```
 
-This will:
+You will be prompted to choose a mode:
 
-* Download the content of the sites defined in `URL_FILE`.
-* Parse the sitemaps of the sites to discover additional URLs.
-* Mirror the websites to `MIRROR_DIR`.
+### Mode 1: Search + Optional Mirroring
 
-### 2. Select and Open HTML Files in Browser
+* Builds a search query (e.g. `site:example.com filetype:pdf`)
+* Fetches URLs using `ddgr`
+* Saves results to `urls.txt`
+* Optionally mirrors the content using `wget`
 
-If you want to select and open the downloaded HTML files in your browser using `fzf`, use the `-s` or `--select` flag:
+### Mode 2: Mirror Only
+
+* Uses existing `urls.txt`
+* Expands sitemap links
+* Downloads content in parallel
+* Stores results in the `mirror/` directory
+
+### Mode 3: View Mirrored Files
+
+* Searches for mirrored files by extension (e.g. `.html`, `.pdf`)
+* Lets you select and open files via `fzf`
+* Opens in your system browser (e.g. `xdg-open`)
+
+---
+
+## Configuration
+
+If not present, a default `mirror.conf` is created. You can customize:
 
 ```bash
-./mirror.sh -s
+# mirror.conf
+
+URL_FILE="./urls.txt"
+MIRROR_DIR="./mirror"
+LOG_FILE="./mirror.log"
+SUMMARY_FILE="./mirror-summary.txt"
+MAX_LEVEL=1
+ACCEPT=""
+REJECT=""
+PARALLEL_JOBS=4
+USE_HEADLESS="false"
+PUPPETEER_SCRIPT="./render.js"
+BROWSER="xdg-open"
 ```
 
-This will:
+---
 
-* Scan the `MIRROR_DIR` for `.html` files.
-* Use `fzf` to allow you to select files.
-* Open the selected files in the browser.
+## Example Workflow
 
-### 3. Customize the Number of Parallel Jobs
+1. Start the script:
 
-You can adjust the number of parallel download jobs by modifying the `PARALLEL_JOBS` variable in `mirror.conf`. This will control the concurrency of the downloads.
+   ```bash
+   ./crawldork.sh
+   ```
 
-## Troubleshooting
+2. Select **Mode 1** and enter a search query.
 
-* **Missing Dependencies**: Make sure all dependencies are installed, including `wget`, `parallel`, `fzf`, `curl`, and `node.js`.
-* **File Paths**: Double-check that the `URL_FILE`, `MIRROR_DIR`, and `PUPPETEER_SCRIPT` paths are correct in your `mirror.conf`.
-* **Sitemap Issues**: If the script doesn't find a sitemap, it will skip that website, but the script will still attempt to download any other available resources.
+3. Save discovered URLs and choose whether to mirror them.
+
+4. Later, use **Mode 3** to browse and open downloaded files.
+
+---
+
+## Notes
+
+* Uses `wget`'s mirroring mode with asset downloading and link conversion.
+* Automatically attempts to find and parse `sitemap.xml` for each URL.
+* Optional Puppeteer support allows for JavaScript-rendered content.
+
+---
 
 ## License
 
-This script is released under the MIT License. Feel free to use and modify it as per your needs.
+This tool is licensed under the MIT License. Use it responsibly and ethically, in accordance with applicable laws and website terms of use.
